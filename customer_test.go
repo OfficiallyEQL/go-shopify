@@ -1,6 +1,7 @@
 package goshopify
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -20,12 +21,12 @@ func TestCustomerList(t *testing.T) {
 	httpmock.RegisterResponder("GET", fmt.Sprintf("https://fooshop.myshopify.com/%s/customers.json", client.pathPrefix),
 		httpmock.NewStringResponder(200, `{"customers": [{"id":1},{"id":2}]}`))
 
-	customers, err := client.Customer.List(nil)
+	customers, err := client.Customer.List(context.Background(), nil)
 	if err != nil {
 		t.Errorf("Customer.List returned error: %v", err)
 	}
 
-	expected := []Customer{{ID: 1}, {ID: 2}}
+	expected := []Customer{{Id: 1}, {Id: 2}}
 	if !reflect.DeepEqual(customers, expected) {
 		t.Errorf("Customer.List returned %+v, expected %+v", customers, expected)
 	}
@@ -54,7 +55,7 @@ func TestCustomerListWithPagination(t *testing.T) {
 		{
 			`{"customers": [{"id":1},{"id":2}]}`,
 			"",
-			[]Customer{{ID: 1}, {ID: 2}},
+			[]Customer{{Id: 1}, {Id: 2}},
 			new(Pagination),
 			nil,
 		},
@@ -98,7 +99,7 @@ func TestCustomerListWithPagination(t *testing.T) {
 		{
 			`{"customers": [{"id":1}]}`,
 			`<http://valid.url?page_info=foo&limit=2>; rel="next"`,
-			[]Customer{{ID: 1}},
+			[]Customer{{Id: 1}},
 			&Pagination{
 				NextPageOptions: &ListOptions{PageInfo: "foo", Limit: 2},
 			},
@@ -107,7 +108,7 @@ func TestCustomerListWithPagination(t *testing.T) {
 		{
 			`{"customers": [{"id":2}]}`,
 			`<http://valid.url?page_info=foo>; rel="next", <http://valid.url?page_info=bar>; rel="previous"`,
-			[]Customer{{ID: 2}},
+			[]Customer{{Id: 2}},
 			&Pagination{
 				NextPageOptions:     &ListOptions{PageInfo: "foo"},
 				PreviousPageOptions: &ListOptions{PageInfo: "bar"},
@@ -126,7 +127,7 @@ func TestCustomerListWithPagination(t *testing.T) {
 
 		httpmock.RegisterResponder("GET", listURL, httpmock.ResponderFromResponse(response))
 
-		customers, pagination, err := client.Customer.ListWithPagination(nil)
+		customers, pagination, err := client.Customer.ListWithPagination(context.Background(), nil)
 		if !reflect.DeepEqual(customers, c.expectedCustomers) {
 			t.Errorf("test %d Customer.ListWithPagination customers returned %+v, expected %+v", i, customers, c.expectedCustomers)
 		}
@@ -165,7 +166,7 @@ func TestCustomerCount(t *testing.T) {
 		params,
 		httpmock.NewStringResponder(200, `{"count": 2}`))
 
-	cnt, err := client.Customer.Count(nil)
+	cnt, err := client.Customer.Count(context.Background(), nil)
 	if err != nil {
 		t.Errorf("Customer.Count returned error: %v", err)
 	}
@@ -176,7 +177,7 @@ func TestCustomerCount(t *testing.T) {
 	}
 
 	date := time.Date(2016, time.January, 1, 0, 0, 0, 0, time.UTC)
-	cnt, err = client.Customer.Count(CountOptions{CreatedAtMin: date})
+	cnt, err = client.Customer.Count(context.Background(), CountOptions{CreatedAtMin: date})
 	if err != nil {
 		t.Errorf("Customer.Count returned error: %v", err)
 	}
@@ -194,12 +195,12 @@ func TestCustomerSearch(t *testing.T) {
 	httpmock.RegisterResponder("GET", fmt.Sprintf("https://fooshop.myshopify.com/%s/customers/search.json", client.pathPrefix),
 		httpmock.NewStringResponder(200, `{"customers": [{"id":1},{"id":2}]}`))
 
-	customers, err := client.Customer.Search(nil)
+	customers, err := client.Customer.Search(context.Background(), nil)
 	if err != nil {
 		t.Errorf("Customer.Search returned error: %v", err)
 	}
 
-	expected := []Customer{{ID: 1}, {ID: 2}}
+	expected := []Customer{{Id: 1}, {Id: 2}}
 	if !reflect.DeepEqual(customers, expected) {
 		t.Errorf("Customer.Search returned %+v, expected %+v", customers, expected)
 	}
@@ -212,41 +213,58 @@ func TestCustomerGet(t *testing.T) {
 	httpmock.RegisterResponder("GET", fmt.Sprintf("https://fooshop.myshopify.com/%s/customers/1.json", client.pathPrefix),
 		httpmock.NewBytesResponder(200, loadFixture("customer.json")))
 
-	customer, err := client.Customer.Get(1, nil)
+	customer, err := client.Customer.Get(context.Background(), 1, nil)
 	if err != nil {
 		t.Errorf("Customer.Get returned error: %v", err)
 	}
 
-	address1 := &CustomerAddress{ID: 1, CustomerID: 1, FirstName: "Test", LastName: "Citizen", Company: "",
+	address1 := &CustomerAddress{
+		Id: 1, CustomerId: 1, FirstName: "Test", LastName: "Citizen", Company: "",
 		Address1: "1 Smith St", Address2: "", City: "BRISBANE", Province: "Queensland", Country: "Australia",
 		Zip: "4000", Phone: "1111 111 111", Name: "Test Citizen", ProvinceCode: "QLD", CountryCode: "AU",
-		CountryName: "Australia", Default: true}
+		CountryName: "Australia", Default: true,
+	}
 	createdAt := time.Date(2017, time.September, 23, 18, 15, 47, 0, time.UTC)
 	updatedAt := time.Date(2017, time.September, 23, 18, 15, 47, 0, time.UTC)
 	totalSpent := decimal.NewFromFloat(278.60)
-
-	expectation := &Customer{
-		ID:               1,
-		Email:            "test@example.com",
-		FirstName:        "Test",
-		LastName:         "Citizen",
-		AcceptsMarketing: true,
-		VerifiedEmail:    true,
-		TaxExempt:        false,
-		OrdersCount:      4,
-		State:            "enabled",
-		TotalSpent:       &totalSpent,
-		LastOrderId:      123,
-		Note:             "",
-		Phone:            "",
-		DefaultAddress:   address1,
-		Addresses:        []*CustomerAddress{address1},
-		CreatedAt:        &createdAt,
-		UpdatedAt:        &updatedAt,
+	emailMarketingConsent1 := EmailMarketingConsent{
+		State:            "not_subscribed",
+		OptInLevel:       "single_opt_in",
+		ConsentUpdatedAt: &updatedAt,
 	}
 
-	if customer.ID != expectation.ID {
-		t.Errorf("Customer.ID returned %+v, expected %+v", customer.ID, expectation.ID)
+	smsMarketingConsent1 := SMSMarketingConsent{
+		State:                "not_subscribed",
+		OptInLevel:           "single_opt_in",
+		ConsentUpdatedAt:     &updatedAt,
+		ConsentCollectedFrom: "OTHER",
+	}
+
+	expectation := &Customer{
+		Id:                        1,
+		Email:                     "test@example.com",
+		FirstName:                 "Test",
+		LastName:                  "Citizen",
+		AcceptsMarketing:          true,
+		VerifiedEmail:             true,
+		TaxExempt:                 false,
+		OrdersCount:               4,
+		State:                     "enabled",
+		TotalSpent:                &totalSpent,
+		LastOrderId:               123,
+		Note:                      "",
+		Phone:                     "",
+		AcceptsMarketingUpdatedAt: &updatedAt,
+		EmailMarketingConsent:     &emailMarketingConsent1,
+		SMSMarketingConsent:       &smsMarketingConsent1,
+		DefaultAddress:            address1,
+		Addresses:                 []*CustomerAddress{address1},
+		CreatedAt:                 &createdAt,
+		UpdatedAt:                 &updatedAt,
+	}
+
+	if customer.Id != expectation.Id {
+		t.Errorf("Customer.Id returned %+v, expected %+v", customer.Id, expectation.Id)
 	}
 	if customer.Email != expectation.Email {
 		t.Errorf("Customer.Email returned %+v, expected %+v", customer.Email, expectation.Email)
@@ -293,11 +311,11 @@ func TestCustomerGet(t *testing.T) {
 	if customer.DefaultAddress == nil {
 		t.Errorf("Customer.Address is nil, expected not nil")
 	} else {
-		if customer.DefaultAddress.ID != expectation.DefaultAddress.ID {
-			t.Errorf("Customer.DefaultAddress.ID returned %+v, expected %+v", customer.DefaultAddress.ID, expectation.DefaultAddress.ID)
+		if customer.DefaultAddress.Id != expectation.DefaultAddress.Id {
+			t.Errorf("Customer.DefaultAddress.Id returned %+v, expected %+v", customer.DefaultAddress.Id, expectation.DefaultAddress.Id)
 		}
-		if customer.DefaultAddress.CustomerID != expectation.DefaultAddress.CustomerID {
-			t.Errorf("Customer.DefaultAddress.CustomerID returned %+v, expected %+v", customer.DefaultAddress.CustomerID, expectation.DefaultAddress.CustomerID)
+		if customer.DefaultAddress.CustomerId != expectation.DefaultAddress.CustomerId {
+			t.Errorf("Customer.DefaultAddress.CustomerId returned %+v, expected %+v", customer.DefaultAddress.CustomerId, expectation.DefaultAddress.CustomerId)
 		}
 		if customer.DefaultAddress.FirstName != expectation.DefaultAddress.FirstName {
 			t.Errorf("Customer.DefaultAddress.FirstName returned %+v, expected %+v", customer.DefaultAddress.FirstName, expectation.DefaultAddress.FirstName)
@@ -336,7 +354,7 @@ func TestCustomerGet(t *testing.T) {
 			t.Errorf("Customer.DefaultAddress.ProvinceCode returned %+v, expected %+v", customer.DefaultAddress.ProvinceCode, expectation.DefaultAddress.ProvinceCode)
 		}
 		if customer.DefaultAddress.CountryCode != expectation.DefaultAddress.CountryCode {
-			t.Errorf("Customer.DefaultAddress.ID returned %+v, expected %+v", customer.DefaultAddress.ID, expectation.DefaultAddress.ID)
+			t.Errorf("Customer.DefaultAddress.Id returned %+v, expected %+v", customer.DefaultAddress.Id, expectation.DefaultAddress.Id)
 		}
 		if customer.DefaultAddress.CountryCode != expectation.DefaultAddress.CountryCode {
 			t.Errorf("Customer.DefaultAddress.CountryCode returned %+v, expected %+v", customer.DefaultAddress.CountryCode, expectation.DefaultAddress.CountryCode)
@@ -351,6 +369,38 @@ func TestCustomerGet(t *testing.T) {
 	if len(customer.Addresses) != len(expectation.Addresses) {
 		t.Errorf("Customer.Addresses count returned %d, expected %d", len(customer.Addresses), len(expectation.Addresses))
 	}
+	if !customer.AcceptsMarketingUpdatedAt.Equal(*expectation.AcceptsMarketingUpdatedAt) {
+		t.Errorf("Customer.AcceptsMarketingUpdatedAt returned %+v, expected %+v", customer.AcceptsMarketingUpdatedAt, expectation.AcceptsMarketingUpdatedAt)
+	}
+	if customer.EmailMarketingConsent == nil {
+		t.Errorf("Customer.EmailMarketingConsent is nil, expected not nil")
+	} else {
+		if !customer.EmailMarketingConsent.ConsentUpdatedAt.Equal(*expectation.EmailMarketingConsent.ConsentUpdatedAt) {
+			t.Errorf("Customer.EmailMarketingConsent.ConsentUpdatedAt returned %+v, expected %+v", customer.EmailMarketingConsent.ConsentUpdatedAt, expectation.EmailMarketingConsent.ConsentUpdatedAt)
+		}
+		if customer.EmailMarketingConsent.State != expectation.EmailMarketingConsent.State {
+			t.Errorf("Customer.EmailMarketingConsent.State returned %+v, expected %+v", customer.EmailMarketingConsent.State, expectation.EmailMarketingConsent.State)
+		}
+		if customer.EmailMarketingConsent.OptInLevel != expectation.EmailMarketingConsent.OptInLevel {
+			t.Errorf("Customer.EmailMarketingConsent.OptInLevel returned %+v, expected %+v", customer.EmailMarketingConsent.OptInLevel, expectation.EmailMarketingConsent.OptInLevel)
+		}
+	}
+	if customer.SMSMarketingConsent == nil {
+		t.Errorf("Customer.SMSMarketingConsent is nil, expected not nil")
+	} else {
+		if !customer.SMSMarketingConsent.ConsentUpdatedAt.Equal(*expectation.SMSMarketingConsent.ConsentUpdatedAt) {
+			t.Errorf("Customer.SMSMarketingConsent.ConsentUpdatedAt returned %+v, expected %+v", customer.SMSMarketingConsent.ConsentUpdatedAt, expectation.SMSMarketingConsent.ConsentUpdatedAt)
+		}
+		if customer.SMSMarketingConsent.State != expectation.SMSMarketingConsent.State {
+			t.Errorf("Customer.SMSMarketingConsent.State returned %+v, expected %+v", customer.SMSMarketingConsent.State, expectation.SMSMarketingConsent.State)
+		}
+		if customer.SMSMarketingConsent.OptInLevel != expectation.SMSMarketingConsent.OptInLevel {
+			t.Errorf("Customer.SMSMarketingConsent.OptInLevel returned %+v, expected %+v", customer.SMSMarketingConsent.OptInLevel, expectation.SMSMarketingConsent.OptInLevel)
+		}
+		if customer.SMSMarketingConsent.ConsentCollectedFrom != expectation.SMSMarketingConsent.ConsentCollectedFrom {
+			t.Errorf("Customer.SMSMarketingConsent.ConsentCollectedFrom returned %+v, expected %+v", customer.SMSMarketingConsent.ConsentCollectedFrom, expectation.SMSMarketingConsent.ConsentCollectedFrom)
+		}
+	}
 }
 
 func TestCustomerUpdate(t *testing.T) {
@@ -361,18 +411,18 @@ func TestCustomerUpdate(t *testing.T) {
 		httpmock.NewBytesResponder(200, loadFixture("customer.json")))
 
 	customer := Customer{
-		ID:   1,
+		Id:   1,
 		Tags: "new",
 	}
 
-	returnedCustomer, err := client.Customer.Update(customer)
+	returnedCustomer, err := client.Customer.Update(context.Background(), customer)
 	if err != nil {
 		t.Errorf("Customer.Update returned error: %v", err)
 	}
 
-	expectedCustomerID := int64(1)
-	if returnedCustomer.ID != expectedCustomerID {
-		t.Errorf("Customer.ID returned %+v expected %+v", returnedCustomer.ID, expectedCustomerID)
+	expectedCustomerId := uint64(1)
+	if returnedCustomer.Id != expectedCustomerId {
+		t.Errorf("Customer.Id returned %+v expected %+v", returnedCustomer.Id, expectedCustomerId)
 	}
 }
 
@@ -384,18 +434,18 @@ func TestCustomerCreate(t *testing.T) {
 		httpmock.NewBytesResponder(200, loadFixture("customer.json")))
 
 	customer := Customer{
-		ID:   1,
+		Id:   1,
 		Tags: "new",
 	}
 
-	returnedCustomer, err := client.Customer.Create(customer)
+	returnedCustomer, err := client.Customer.Create(context.Background(), customer)
 	if err != nil {
 		t.Errorf("Customer.Create returned error: %v", err)
 	}
 
-	expectedCustomerID := int64(1)
-	if returnedCustomer.ID != expectedCustomerID {
-		t.Errorf("Customer.ID returned %+v expected %+v", returnedCustomer.ID, expectedCustomerID)
+	expectedCustomerId := uint64(1)
+	if returnedCustomer.Id != expectedCustomerId {
+		t.Errorf("Customer.Id returned %+v expected %+v", returnedCustomer.Id, expectedCustomerId)
 	}
 }
 
@@ -406,7 +456,7 @@ func TestCustomerDelete(t *testing.T) {
 	httpmock.RegisterResponder("DELETE", fmt.Sprintf("https://fooshop.myshopify.com/%s/customers/1.json", client.pathPrefix),
 		httpmock.NewStringResponder(200, ""))
 
-	err := client.Customer.Delete(1)
+	err := client.Customer.Delete(context.Background(), 1)
 	if err != nil {
 		t.Errorf("Customer.Delete returned error: %v", err)
 	}
@@ -419,12 +469,12 @@ func TestCustomerListMetafields(t *testing.T) {
 	httpmock.RegisterResponder("GET", fmt.Sprintf("https://fooshop.myshopify.com/%s/customers/1/metafields.json", client.pathPrefix),
 		httpmock.NewStringResponder(200, `{"metafields": [{"id":1},{"id":2}]}`))
 
-	metafields, err := client.Customer.ListMetafields(1, nil)
+	metafields, err := client.Customer.ListMetafields(context.Background(), 1, nil)
 	if err != nil {
 		t.Errorf("Customer.ListMetafields() returned error: %v", err)
 	}
 
-	expected := []Metafield{{ID: 1}, {ID: 2}}
+	expected := []Metafield{{Id: 1}, {Id: 2}}
 	if !reflect.DeepEqual(metafields, expected) {
 		t.Errorf("Customer.ListMetafields() returned %+v, expected %+v", metafields, expected)
 	}
@@ -444,7 +494,7 @@ func TestCustomerCountMetafields(t *testing.T) {
 		params,
 		httpmock.NewStringResponder(200, `{"count": 2}`))
 
-	cnt, err := client.Customer.CountMetafields(1, nil)
+	cnt, err := client.Customer.CountMetafields(context.Background(), 1, nil)
 	if err != nil {
 		t.Errorf("Customer.CountMetafields() returned error: %v", err)
 	}
@@ -455,7 +505,7 @@ func TestCustomerCountMetafields(t *testing.T) {
 	}
 
 	date := time.Date(2016, time.January, 1, 0, 0, 0, 0, time.UTC)
-	cnt, err = client.Customer.CountMetafields(1, CountOptions{CreatedAtMin: date})
+	cnt, err = client.Customer.CountMetafields(context.Background(), 1, CountOptions{CreatedAtMin: date})
 	if err != nil {
 		t.Errorf("Customer.CountMetafields() returned error: %v", err)
 	}
@@ -473,12 +523,12 @@ func TestCustomerGetMetafield(t *testing.T) {
 	httpmock.RegisterResponder("GET", fmt.Sprintf("https://fooshop.myshopify.com/%s/customers/1/metafields/2.json", client.pathPrefix),
 		httpmock.NewStringResponder(200, `{"metafield": {"id":2}}`))
 
-	metafield, err := client.Customer.GetMetafield(1, 2, nil)
+	metafield, err := client.Customer.GetMetafield(context.Background(), 1, 2, nil)
 	if err != nil {
 		t.Errorf("Customer.GetMetafield() returned error: %v", err)
 	}
 
-	expected := &Metafield{ID: 2}
+	expected := &Metafield{Id: 2}
 	if !reflect.DeepEqual(metafield, expected) {
 		t.Errorf("Customer.GetMetafield() returned %+v, expected %+v", metafield, expected)
 	}
@@ -498,7 +548,7 @@ func TestCustomerCreateMetafield(t *testing.T) {
 		Namespace: "affiliates",
 	}
 
-	returnedMetafield, err := client.Customer.CreateMetafield(1, metafield)
+	returnedMetafield, err := client.Customer.CreateMetafield(context.Background(), 1, metafield)
 	if err != nil {
 		t.Errorf("Customer.CreateMetafield() returned error: %v", err)
 	}
@@ -514,14 +564,14 @@ func TestCustomerUpdateMetafield(t *testing.T) {
 		httpmock.NewBytesResponder(200, loadFixture("metafield.json")))
 
 	metafield := Metafield{
-		ID:        2,
+		Id:        2,
 		Key:       "app_key",
 		Value:     "app_value",
 		Type:      MetafieldTypeSingleLineTextField,
 		Namespace: "affiliates",
 	}
 
-	returnedMetafield, err := client.Customer.UpdateMetafield(1, metafield)
+	returnedMetafield, err := client.Customer.UpdateMetafield(context.Background(), 1, metafield)
 	if err != nil {
 		t.Errorf("Customer.UpdateMetafield() returned error: %v", err)
 	}
@@ -536,7 +586,7 @@ func TestCustomerDeleteMetafield(t *testing.T) {
 	httpmock.RegisterResponder("DELETE", fmt.Sprintf("https://fooshop.myshopify.com/%s/customers/1/metafields/2.json", client.pathPrefix),
 		httpmock.NewStringResponder(200, "{}"))
 
-	err := client.Customer.DeleteMetafield(1, 2)
+	err := client.Customer.DeleteMetafield(context.Background(), 1, 2)
 	if err != nil {
 		t.Errorf("Customer.DeleteMetafield() returned error: %v", err)
 	}
@@ -559,7 +609,7 @@ func TestCustomerListOrders(t *testing.T) {
 		httpmock.NewBytesResponder(200, loadFixture("orders.json")),
 	)
 
-	orders, err := client.Customer.ListOrders(1, nil)
+	orders, err := client.Customer.ListOrders(context.Background(), 1, nil)
 	if err != nil {
 		t.Errorf("Customer.ListOrders returned error: %v", err)
 	}
@@ -569,7 +619,7 @@ func TestCustomerListOrders(t *testing.T) {
 		t.Errorf("Customer.ListOrders got %v orders, expected: 1", len(orders))
 	}
 
-	orders, err = client.Customer.ListOrders(1, OrderListOptions{Status: "any"})
+	orders, err = client.Customer.ListOrders(context.Background(), 1, OrderListOptions{Status: "any"})
 	if err != nil {
 		t.Errorf("Customer.ListOrders returned error: %v", err)
 	}
@@ -593,7 +643,7 @@ func TestCustomerListTags(t *testing.T) {
 		httpmock.NewBytesResponder(200, loadFixture("customer_tags.json")),
 	)
 
-	tags, err := client.Customer.ListTags(nil)
+	tags, err := client.Customer.ListTags(context.Background(), nil)
 	if err != nil {
 		t.Errorf("Customer.ListTags returned error: %v", err)
 	}

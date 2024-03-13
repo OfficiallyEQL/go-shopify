@@ -3,7 +3,9 @@ package goshopify
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -31,10 +33,8 @@ const (
 	defaultHttpTimeout   = 10
 )
 
-var (
-	// version regex match
-	apiVersionRegex = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}$`)
-)
+// version regex match
+var apiVersionRegex = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}$`)
 
 // App represents basic app settings such as Api key, secret, scope, and redirect url.
 // See oauth.go for OAuth related helper functions.
@@ -128,6 +128,9 @@ type Client struct {
 	AssignedFulfillmentOrder   AssignedFulfillmentOrderService
 	FulfillmentEvent           FulfillmentEventService
 	FulfillmentRequest         FulfillmentRequestService
+	PaymentsTransactions       PaymentsTransactionsService
+	OrderRisk                  OrderRiskService
+	ApiPermissions             ApiPermissionsService
 }
 
 // A general response error that follows a similar layout to Shopify's response
@@ -191,7 +194,7 @@ type RateLimitError struct {
 // be resolved to the BaseURL of the Client. Relative URLS should always be
 // specified without a preceding slash. If specified, the value pointed to by
 // body is JSON encoded and included as the request body.
-func (c *Client) NewRequest(method, relPath string, body, options interface{}) (*http.Request, error) {
+func (c *Client) NewRequest(ctx context.Context, method, relPath string, body, options interface{}) (*http.Request, error) {
 	rel, err := url.Parse(relPath)
 	if err != nil {
 		return nil, err
@@ -230,32 +233,48 @@ func (c *Client) NewRequest(method, relPath string, body, options interface{}) (
 		return nil, err
 	}
 
+	req = req.WithContext(ctx)
+
 	req.Header.Add("Content-Type", "application/json")
 	req.Header.Add("Accept", "application/json")
 	req.Header.Add("User-Agent", UserAgent)
+
 	if c.token != "" {
 		req.Header.Add("X-Shopify-Access-Token", c.token)
 	} else if c.app.Password != "" {
 		req.SetBasicAuth(c.app.ApiKey, c.app.Password)
 	}
+
 	return req, nil
 }
 
-// NewClient returns a new Shopify API client with an already authenticated shopname and
+// MustNewClient returns a new Shopify API client with an already authenticated shopname and
 // token. The shopName parameter is the shop's myshopify domain,
 // e.g. "theshop.myshopify.com", or simply "theshop"
 // a.NewClient(shopName, token, opts) is equivalent to NewClient(a, shopName, token, opts)
-func (app App) NewClient(shopName, token string, opts ...Option) *Client {
+func (app App) NewClient(shopName, token string, opts ...Option) (*Client, error) {
 	return NewClient(app, shopName, token, opts...)
 }
 
 // Returns a new Shopify API client with an already authenticated shopname and
 // token. The shopName parameter is the shop's myshopify domain,
 // e.g. "theshop.myshopify.com", or simply "theshop"
-func NewClient(app App, shopName, token string, opts ...Option) *Client {
+// panics if an error occurs
+func MustNewClient(app App, shopName, token string, opts ...Option) *Client {
+	c, err := NewClient(app, shopName, token, opts...)
+	if err != nil {
+		panic(err)
+	}
+	return c
+}
+
+// Returns a new Shopify API client with an already authenticated shopname and
+// token. The shopName parameter is the shop's myshopify domain,
+// e.g. "theshop.myshopify.com", or simply "theshop"
+func NewClient(app App, shopName, token string, opts ...Option) (*Client, error) {
 	baseURL, err := url.Parse(ShopBaseUrl(shopName))
 	if err != nil {
-		panic(err) // something really wrong with shopName
+		return nil, err
 	}
 
 	c := &Client{
@@ -314,13 +333,16 @@ func NewClient(app App, shopName, token string, opts ...Option) *Client {
 	c.AssignedFulfillmentOrder = &AssignedFulfillmentOrderServiceOp{client: c}
 	c.FulfillmentEvent = &FulfillmentEventServiceOp{client: c}
 	c.FulfillmentRequest = &FulfillmentRequestServiceOp{client: c}
+	c.PaymentsTransactions = &PaymentsTransactionsServiceOp{client: c}
+	c.OrderRisk = &OrderRiskServiceOp{client: c}
+	c.ApiPermissions = &ApiPermissionsServiceOp{client: c}
 
 	// apply any options
 	for _, opt := range opts {
 		opt(c)
 	}
 
-	return c
+	return c, nil
 }
 
 // Do sends an API request and populates the given interface with the parsed
@@ -343,8 +365,19 @@ func (c *Client) doGetHeaders(req *http.Request, v interface{}) (http.Header, er
 	c.attempts = 0
 	c.logRequest(req)
 
+	// copy request body so it can be re-used
+	var body []byte
+	if req.Body != nil {
+		body, err = ioutil.ReadAll(req.Body)
+		defer req.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	for {
 		c.attempts++
+		req.Body = ioutil.NopCloser(bytes.NewBuffer(body))
 		resp, err = c.Client.Do(req)
 		c.logResponse(resp)
 		if err != nil {
@@ -439,7 +472,10 @@ func (c *Client) logBody(body *io.ReadCloser, format string) {
 	if body == nil {
 		return
 	}
-	b, _ := ioutil.ReadAll(*body)
+	b, err := ioutil.ReadAll(*body)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return
+	}
 	if len(b) > 0 {
 		c.log.Debugf(format, string(b))
 	}
@@ -566,7 +602,6 @@ func CheckResponseError(r *http.Response) error {
 
 // General list options that can be used for most collections of entities.
 type ListOptions struct {
-
 	// PageInfo is used with new pagination search.
 	PageInfo string `url:"page_info,omitempty"`
 
@@ -574,7 +609,7 @@ type ListOptions struct {
 	// It is the deprecated way to do pagination.
 	Page         int       `url:"page,omitempty"`
 	Limit        int       `url:"limit,omitempty"`
-	SinceID      int64     `url:"since_id,omitempty"`
+	SinceId      *uint64   `url:"since_id,omitempty"`
 	CreatedAtMin time.Time `url:"created_at_min,omitempty"`
 	CreatedAtMax time.Time `url:"created_at_max,omitempty"`
 	UpdatedAtMin time.Time `url:"updated_at_min,omitempty"`
@@ -582,7 +617,7 @@ type ListOptions struct {
 	Order        string    `url:"order,omitempty"`
 	Fields       string    `url:"fields,omitempty"`
 	Vendor       string    `url:"vendor,omitempty"`
-	IDs          []int64   `url:"ids,omitempty,comma"`
+	Ids          []uint64  `url:"ids,omitempty,comma"`
 }
 
 // General count options that can be used for most collection counts.
@@ -593,11 +628,11 @@ type CountOptions struct {
 	UpdatedAtMax time.Time `url:"updated_at_max,omitempty"`
 }
 
-func (c *Client) Count(path string, options interface{}) (int, error) {
+func (c *Client) Count(ctx context.Context, path string, options interface{}) (int, error) {
 	resource := struct {
 		Count int `json:"count"`
 	}{}
-	err := c.Get(path, &resource, options)
+	err := c.Get(ctx, path, &resource, options)
 	return resource.Count, err
 }
 
@@ -610,8 +645,8 @@ func (c *Client) Count(path string, options interface{}) (int, error) {
 // The options argument is used for specifying request options such as search
 // parameters like created_at_min
 // Any data returned from Shopify will be marshalled into resource argument.
-func (c *Client) CreateAndDo(method, relPath string, data, options, resource interface{}) error {
-	_, err := c.createAndDoGetHeaders(method, relPath, data, options, resource)
+func (c *Client) CreateAndDo(ctx context.Context, method, relPath string, data, options, resource interface{}) error {
+	_, err := c.createAndDoGetHeaders(ctx, method, relPath, data, options, resource)
 	if err != nil {
 		return err
 	}
@@ -619,14 +654,14 @@ func (c *Client) CreateAndDo(method, relPath string, data, options, resource int
 }
 
 // createAndDoGetHeaders creates an executes a request while returning the response headers.
-func (c *Client) createAndDoGetHeaders(method, relPath string, data, options, resource interface{}) (http.Header, error) {
+func (c *Client) createAndDoGetHeaders(ctx context.Context, method, relPath string, data, options, resource interface{}) (http.Header, error) {
 	if strings.HasPrefix(relPath, "/") {
 		// make sure it's a relative path
 		relPath = strings.TrimLeft(relPath, "/")
 	}
 
 	relPath = path.Join(c.pathPrefix, relPath)
-	req, err := c.NewRequest(method, relPath, data, options)
+	req, err := c.NewRequest(ctx, method, relPath, data, options)
 	if err != nil {
 		return nil, err
 	}
@@ -636,14 +671,14 @@ func (c *Client) createAndDoGetHeaders(method, relPath string, data, options, re
 
 // Get performs a GET request for the given path and saves the result in the
 // given resource.
-func (c *Client) Get(path string, resource, options interface{}) error {
-	return c.CreateAndDo("GET", path, nil, options, resource)
+func (c *Client) Get(ctx context.Context, path string, resource, options interface{}) error {
+	return c.CreateAndDo(ctx, "GET", path, nil, options, resource)
 }
 
 // ListWithPagination performs a GET request for the given path and saves the result in the
 // given resource and returns the pagination.
-func (c *Client) ListWithPagination(path string, resource, options interface{}) (*Pagination, error) {
-	headers, err := c.createAndDoGetHeaders("GET", path, nil, options, resource)
+func (c *Client) ListWithPagination(ctx context.Context, path string, resource, options interface{}) (*Pagination, error) {
+	headers, err := c.createAndDoGetHeaders(ctx, "GET", path, nil, options, resource)
 	if err != nil {
 		return nil, err
 	}
@@ -726,22 +761,22 @@ func extractPagination(linkHeader string) (*Pagination, error) {
 
 // Post performs a POST request for the given path and saves the result in the
 // given resource.
-func (c *Client) Post(path string, data, resource interface{}) error {
-	return c.CreateAndDo("POST", path, data, nil, resource)
+func (c *Client) Post(ctx context.Context, path string, data, resource interface{}) error {
+	return c.CreateAndDo(ctx, "POST", path, data, nil, resource)
 }
 
 // Put performs a PUT request for the given path and saves the result in the
 // given resource.
-func (c *Client) Put(path string, data, resource interface{}) error {
-	return c.CreateAndDo("PUT", path, data, nil, resource)
+func (c *Client) Put(ctx context.Context, path string, data, resource interface{}) error {
+	return c.CreateAndDo(ctx, "PUT", path, data, nil, resource)
 }
 
 // Delete performs a DELETE request for the given path
-func (c *Client) Delete(path string) error {
-	return c.DeleteWithOptions(path, nil)
+func (c *Client) Delete(ctx context.Context, path string) error {
+	return c.DeleteWithOptions(ctx, path, nil)
 }
 
 // DeleteWithOptions performs a DELETE request for the given path WithOptions
-func (c *Client) DeleteWithOptions(path string, options interface{}) error {
-	return c.CreateAndDo("DELETE", path, nil, options, nil)
+func (c *Client) DeleteWithOptions(ctx context.Context, path string, options interface{}) error {
+	return c.CreateAndDo(ctx, "DELETE", path, nil, options, nil)
 }
